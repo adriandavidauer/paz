@@ -1,0 +1,4 @@
+imageio==2.37.0
+medmnist==3.0.2
+ipywidgets==8.1.7
+tensorflow==2.19.0
