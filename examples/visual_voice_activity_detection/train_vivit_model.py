@@ -13,7 +13,9 @@ import numpy as np
 import tensorflow as tf  # for data preprocessing only
 import keras
 from keras import layers, ops
+import h5py
 # local imports
+from vvad_lrs3_dataset import VvadLrs3Dataset
 
 # end file header
 __author__      = 'Adrian Auer'
@@ -58,45 +60,62 @@ NUM_LAYERS = 8
 
 
 # TODO: this needs to be adjusted so that it works with the VVAD-LRS3 dataset
-def download_and_prepare_dataset(data_info: dict):
+def download_and_prepare_vvadlrs3():
     """Utility function to download the dataset.
 
     Arguments:
         data_info (dict): Dataset metadata.
     """
-    data_path = keras.utils.get_file(origin=data_info["url"], md5_hash=data_info["MD5"])
+    print("Downloading VVAD-LRS3 dataset...")
+    extract_dir = os.path.expanduser(os.path.join("~", ".keras", "datasets", "vvadlrs3_extracted"))
+    if not os.path.exists(extract_dir):
+        data_path = keras.utils.get_file(origin="https://www.kaggle.com/api/v1/datasets/download/adrianlubitz/vvadlrs3", fname="vvadlrs3.zip", extract=True)
+    else:
+        print("Already extracted, skipping extraction.")
+    # print the content of the data_path
+    print("Data path:", extract_dir)
+    print("Files in data path:", os.listdir(extract_dir))
 
-    with np.load(data_path) as data:
-        # Get videos
-        train_videos = data["train_images"]
-        valid_videos = data["val_images"]
-        test_videos = data["test_images"]
 
-        # Get labels
-        train_labels = data["train_labels"].flatten()
-        valid_labels = data["val_labels"].flatten()
-        test_labels = data["test_labels"].flatten()
+    # TODO: use Cedric's Generator to load the dataset USE extract_path!!!!
+    train_dataset = VvadLrs3Dataset(validation_split=0.2,test_split=0.1)
+    validation_dataset = VvadLrs3Dataset(split='validation', validation_split=0.2,test_split=0.1)
+    test_dataset = VvadLrs3Dataset(split='test', validation_split=0.2,test_split=0.1)
+
+    # data = h5py.File(os.path.join(extract_dir, 'faceImages_small.h5'), mode='r')
+    # x_train = data.get('x_train')
+    # y_train = data.get('y_train')
+    # num_samples = x_train.shape[0]
+    # split_idx = int(num_samples * 0.8)  # 80% train, 20% validation
+    # x_valid = x_train[split_idx:]
+    # y_valid = y_train[split_idx:]
+    # x_train = x_train[:split_idx]
+    # y_train = y_train[:split_idx]
+
+
+    # x_test = data.get('x_test')
+    # y_test = data.get('y_test')
+
+    # print("loaded training data")
+    # print("Training data shape:", x_train.shape, y_train.shape)
+    # print("Validation data shape:", x_valid.shape, y_valid.shape)
+    # print("Test data shape:", x_test.shape, y_test.shape)
+
+        # # Get videos
+        # train_videos = data["train_images"]
+        # valid_videos = data["val_images"]
+        # test_videos = data["test_images"]
+
+        # # Get labels
+        # train_labels = data["train_labels"].flatten()
+        # valid_labels = data["val_labels"].flatten()
+        # test_labels = data["test_labels"].flatten()
 
     return (
-        (train_videos, train_labels),
+        (x_train, y_train),
         (valid_videos, valid_labels),
-        (test_videos, test_labels),
+        (x_test, y_test),
     )
-
-
-# Get the metadata of the dataset
-info = medmnist.INFO[DATASET_NAME]
-
-# Get the dataset
-prepared_dataset = download_and_prepare_dataset(info)
-(train_videos, train_labels) = prepared_dataset[0]
-(valid_videos, valid_labels) = prepared_dataset[1]
-(test_videos, test_labels) = prepared_dataset[2]
-
-"""
-### `tf.data` pipeline
-"""
-
 
 def preprocess(frames: tf.Tensor, label: tf.Tensor):
     """Preprocess the frames tensors and parse the labels."""
@@ -130,11 +149,6 @@ def prepare_dataloader(
         .prefetch(tf.data.AUTOTUNE)
     )
     return dataloader
-
-
-trainloader = prepare_dataloader(train_videos, train_labels, "train")
-validloader = prepare_dataloader(valid_videos, valid_labels, "valid")
-testloader = prepare_dataloader(test_videos, test_labels, "test")
 
 """
 ## Tubelet Embedding
@@ -310,36 +324,6 @@ def run_experiment():
 
     return model
 
-
-model = run_experiment()
-
-"""
-## Inference
-"""
-
-NUM_SAMPLES_VIZ = 25
-testsamples, labels = next(iter(testloader))
-testsamples, labels = testsamples[:NUM_SAMPLES_VIZ], labels[:NUM_SAMPLES_VIZ]
-
-ground_truths = []
-preds = []
-videos = []
-
-for i, (testsample, label) in enumerate(zip(testsamples, labels)):
-    # Generate gif
-    testsample = np.reshape(testsample.numpy(), (-1, 28, 28))
-    with io.BytesIO() as gif:
-        imageio.mimsave(gif, (testsample * 255).astype("uint8"), "GIF", fps=5)
-        videos.append(gif.getvalue())
-
-    # Get model prediction
-    output = model.predict(ops.expand_dims(testsample, axis=0))[0]
-    pred = np.argmax(output, axis=0)
-
-    ground_truths.append(label.numpy().astype("int"))
-    preds.append(pred)
-
-
 def make_box_for_grid(image_widget, fit):
     """Make a VBox to hold caption/image for demonstrating option_fit values.
 
@@ -363,45 +347,92 @@ def make_box_for_grid(image_widget, fit):
     vb.children = [h, boxb]
     return vb
 
+if __name__ == "__main__":
 
-boxes = []
-for i in range(NUM_SAMPLES_VIZ):
-    ib = ipywidgets.widgets.Image(value=videos[i], width=100, height=100)
-    true_class = info["label"][str(ground_truths[i])]
-    pred_class = info["label"][str(preds[i])]
-    caption = f"T: {true_class} | P: {pred_class}"
 
-    boxes.append(make_box_for_grid(ib, caption))
+    # Get the dataset
+    prepared_dataset = download_and_prepare_vvadlrs3()
+    (train_videos, train_labels) = prepared_dataset[0]
+    (valid_videos, valid_labels) = prepared_dataset[1]
+    (test_videos, test_labels) = prepared_dataset[2]
 
-ipywidgets.widgets.GridBox(
-    boxes, layout=ipywidgets.widgets.Layout(grid_template_columns="repeat(5, 200px)")
-)
 
-"""
-## Final thoughts
+    trainloader = prepare_dataloader(train_videos, train_labels, "train")
+    validloader = prepare_dataloader(valid_videos, valid_labels, "valid")
+    testloader = prepare_dataloader(test_videos, test_labels, "test")
 
-With a vanilla implementation, we achieve ~79-80% Top-1 accuracy on the
-test dataset.
 
-The hyperparameters used in this tutorial were finalized by running a
-hyperparameter search using
-[W&B Sweeps](https://docs.wandb.ai/guides/sweeps).
-You can find out our sweeps result
-[here](https://wandb.ai/minimal-implementations/vivit/sweeps/66fp0lhz)
-and our quick analysis of the results
-[here](https://wandb.ai/minimal-implementations/vivit/reports/Hyperparameter-Tuning-Analysis--VmlldzoxNDEwNzcx).
 
-For further improvement, you could look into the following:
+    model = run_experiment()
 
-- Using data augmentation for videos.
-- Using a better regularization scheme for training.
-- Apply different variants of the transformer model as in the paper.
+    """
+    ## Inference
+    """
 
-We would like to thank [Anurag Arnab](https://anuragarnab.github.io/)
-(first author of ViViT) for helpful discussion. We are grateful to
-[Weights and Biases](https://wandb.ai/site) program for helping with
-GPU credits.
+    NUM_SAMPLES_VIZ = 25
+    testsamples, labels = next(iter(testloader))
+    testsamples, labels = testsamples[:NUM_SAMPLES_VIZ], labels[:NUM_SAMPLES_VIZ]
 
-You can use the trained model hosted on [Hugging Face Hub](https://huggingface.co/keras-io/video-vision-transformer)
-and try the demo on [Hugging Face Spaces](https://huggingface.co/spaces/keras-io/video-vision-transformer-CT).
-"""
+    ground_truths = []
+    preds = []
+    videos = []
+
+    for i, (testsample, label) in enumerate(zip(testsamples, labels)):
+        # Generate gif
+        testsample = np.reshape(testsample.numpy(), (-1, 28, 28))
+        with io.BytesIO() as gif:
+            imageio.mimsave(gif, (testsample * 255).astype("uint8"), "GIF", fps=5)
+            videos.append(gif.getvalue())
+
+        # Get model prediction
+        output = model.predict(ops.expand_dims(testsample, axis=0))[0]
+        pred = np.argmax(output, axis=0)
+
+        ground_truths.append(label.numpy().astype("int"))
+        preds.append(pred)
+
+
+
+
+
+    boxes = []
+    for i in range(NUM_SAMPLES_VIZ):
+        ib = ipywidgets.widgets.Image(value=videos[i], width=100, height=100)
+        true_class = info["label"][str(ground_truths[i])]
+        pred_class = info["label"][str(preds[i])]
+        caption = f"T: {true_class} | P: {pred_class}"
+
+        boxes.append(make_box_for_grid(ib, caption))
+
+    ipywidgets.widgets.GridBox(
+        boxes, layout=ipywidgets.widgets.Layout(grid_template_columns="repeat(5, 200px)")
+    )
+
+    """
+    ## Final thoughts
+
+    With a vanilla implementation, we achieve ~79-80% Top-1 accuracy on the
+    test dataset.
+
+    The hyperparameters used in this tutorial were finalized by running a
+    hyperparameter search using
+    [W&B Sweeps](https://docs.wandb.ai/guides/sweeps).
+    You can find out our sweeps result
+    [here](https://wandb.ai/minimal-implementations/vivit/sweeps/66fp0lhz)
+    and our quick analysis of the results
+    [here](https://wandb.ai/minimal-implementations/vivit/reports/Hyperparameter-Tuning-Analysis--VmlldzoxNDEwNzcx).
+
+    For further improvement, you could look into the following:
+
+    - Using data augmentation for videos.
+    - Using a better regularization scheme for training.
+    - Apply different variants of the transformer model as in the paper.
+
+    We would like to thank [Anurag Arnab](https://anuragarnab.github.io/)
+    (first author of ViViT) for helpful discussion. We are grateful to
+    [Weights and Biases](https://wandb.ai/site) program for helping with
+    GPU credits.
+
+    You can use the trained model hosted on [Hugging Face Hub](https://huggingface.co/keras-io/video-vision-transformer)
+    and try the demo on [Hugging Face Spaces](https://huggingface.co/spaces/keras-io/video-vision-transformer-CT).
+    """
