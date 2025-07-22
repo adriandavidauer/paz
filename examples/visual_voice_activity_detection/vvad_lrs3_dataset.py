@@ -21,11 +21,13 @@ __author__      = 'Adrian Auer'
 REDUCTION_METHODS = ['cut', 'reduce']
 DATA_VARIANTS = ['face_images', 'lip_images', 'face_features', 'lip_features']
 URL= "https://www.kaggle.com/api/v1/datasets/download/adrianlubitz/vvadlrs3"
+FNAMAE = "vvadlrs3"
 
 class VvadLrs3Dataset(Generator):
     """Class for generating the VVAD-LRS3 dataset.
     # Arguments
-        path: String. Full path to vvadlrs3 folder containing 'faceImages_small.h5', 'lipImages.h5', 'faceFeatures.h5' and 'lipFeatures.h5' files.
+        path: String. Path to where the dataset should be downloaded or is already downloaded. 
+            Default is '~/.keras/paz/datasets'.
         split: String. Valid option contain 'train', 'validation' or 'test'.
         validation_split: Float. Percentage of the dataset to be used for validation (valid options between 0.0 to 1.0). Set
             to 0.0 to disable.
@@ -60,29 +62,30 @@ class VvadLrs3Dataset(Generator):
         if reduction_method not in REDUCTION_METHODS:
             raise ValueError(f"Invalid reduction_method '{reduction_method}'. Valid options are {REDUCTION_METHODS}")
 
-        # TODO: Check downloading with different paths + remove print statements
+        # TODO: remove print statements
         print("Downloading VVAD-LRS3 dataset...")
         path = os.path.expanduser(path)
-        print("Data will be downloaded to:", path)
-        extract_dir = os.path.join(path, "vvadlrs3_extracted") 
-        print("Data extracted path:", extract_dir)
-        if not os.path.exists(extract_dir):
-            data_path = keras.utils.get_file(origin=URL, fname="vvadlrs3.zip", cache_dir=path, extract=True)
+        # print("Data will be downloaded to:", path)
+        # extract_dir = os.path.join(path, "vvadlrs3_extracted") 
+        data_path = os.path.join(path, FNAMAE)
+        print("Data extracted path:", data_path)
+        if not os.path.exists(data_path):
+            data_path = keras.utils.get_file(origin=URL, fname=FNAMAE, cache_dir=path, extract=True) # TODO: the download ends up in /tmp/.keras/datasets
         else:
             print("Already extracted, skipping extraction.")
         # print the content of the data_path
         print("Data path:", data_path)
         
-        print("Files in data extracted path:", os.listdir(extract_dir))
+        print("Files in data extracted path:", os.listdir(data_path))
 
         if data_variant == 'face_images':
-            path = os.path.join(extract_dir, 'faceImages_small.h5')
+            path = os.path.join(data_path, 'faceImages_small.h5')
         elif data_variant == 'lip_images':
-            path = os.path.join(extract_dir, 'lipImages.h5')
+            path = os.path.join(data_path, 'lipImages.h5')
         elif data_variant == 'face_features':
-            path = os.path.join(extract_dir, 'faceFeatures.h5')
+            path = os.path.join(data_path, 'faceFeatures.h5')
         elif data_variant == 'lip_features':
-            path = os.path.join(extract_dir, 'lipFeatures.h5')
+            path = os.path.join(data_path, 'lipFeatures.h5')
         print("Using dataset path:", path)
             # path = os.path.join(path, 'vvadlrs3_faceImages_small.h5')
 
@@ -254,3 +257,4 @@ if __name__ == '__main__':
         print(sample.shape, label)
         break  # Just to show the first sample
     print("Number of classes:", dataset.num_classes)
+    print("Label shape: ", label.shape)

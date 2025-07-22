@@ -36,7 +36,7 @@ search. You can learn more about the process in the "conclusion" section.
 
 # DATA
 DATASET_NAME = "VVAD-LRS3"
-BATCH_SIZE = 32
+BATCH_SIZE = 16 # TODO: was 32 before, reduced because of OOM errors
 AUTO = tf.data.AUTOTUNE
 INPUT_SHAPE = (38, 96, 96, 3) # (num_frames, height, width, channels) for VVAD-LRS3 dataset
 NUM_CLASSES = 2  # VVAD-LRS3 has 2 classes: speech and non-speech
@@ -66,21 +66,11 @@ def download_and_prepare_vvadlrs3():
     Arguments:
         data_info (dict): Dataset metadata.
     """
-    print("Downloading VVAD-LRS3 dataset...")
-    extract_dir = os.path.expanduser(os.path.join("~", ".keras", "datasets", "vvadlrs3_extracted"))
-    if not os.path.exists(extract_dir):
-        data_path = keras.utils.get_file(origin="https://www.kaggle.com/api/v1/datasets/download/adrianlubitz/vvadlrs3", fname="vvadlrs3.zip", extract=True)
-    else:
-        print("Already extracted, skipping extraction.")
-    # print the content of the data_path
-    print("Data path:", extract_dir)
-    print("Files in data path:", os.listdir(extract_dir))
 
-
-    # TODO: use Cedric's Generator to load the dataset USE extract_path!!!!
-    train_dataset = VvadLrs3Dataset(validation_split=0.2,test_split=0.1)
-    validation_dataset = VvadLrs3Dataset(split='validation', validation_split=0.2,test_split=0.1)
-    test_dataset = VvadLrs3Dataset(split='test', validation_split=0.2,test_split=0.1)
+    # using the Generator to load the dataset 
+    train_dataset = VvadLrs3Dataset(path="/host-home-folder/.keras/paz/datasets", validation_split=0.2,test_split=0.1)#, testing=True) # TODO: remove tesing=True
+    validation_dataset = VvadLrs3Dataset(path="/host-home-folder/.keras/paz/datasets", split='validation', validation_split=0.2,test_split=0.1)#, testing=True) # TODO: remove tesing=True
+    test_dataset = VvadLrs3Dataset(path="/host-home-folder/.keras/paz/datasets", split='test', validation_split=0.2,test_split=0.1)#, testing=True) # TODO: remove tesing=True
 
     # data = h5py.File(os.path.join(extract_dir, 'faceImages_small.h5'), mode='r')
     # x_train = data.get('x_train')
@@ -112,11 +102,11 @@ def download_and_prepare_vvadlrs3():
         # test_labels = data["test_labels"].flatten()
 
     return (
-        (x_train, y_train),
-        (valid_videos, valid_labels),
-        (x_test, y_test),
+        train_dataset,
+        validation_dataset,
+        test_dataset,
     )
-
+# TODO: Will this work with the VVAD-LRS3 dataset?
 def preprocess(frames: tf.Tensor, label: tf.Tensor):
     """Preprocess the frames tensors and parse the labels."""
     # Preprocess images
@@ -132,13 +122,16 @@ def preprocess(frames: tf.Tensor, label: tf.Tensor):
 
 
 def prepare_dataloader(
-    videos: np.ndarray,
-    labels: np.ndarray,
+    data_generator: VvadLrs3Dataset,
     loader_type: str = "train",
     batch_size: int = BATCH_SIZE,
 ):
     """Utility function to prepare the dataloader."""
-    dataset = tf.data.Dataset.from_tensor_slices((videos, labels))
+    dataset = tf.data.Dataset.from_generator(data_generator,
+                                             output_signature=(
+                                                 tf.TensorSpec(shape=(38, 96, 96, 3), dtype=tf.float32),
+                                                 tf.TensorSpec(shape=(), dtype=tf.int64)
+                                             ))
 
     if loader_type == "train":
         dataset = dataset.shuffle(BATCH_SIZE * 2)
@@ -316,7 +309,11 @@ def run_experiment():
     )
 
     # Train the model.
-    _ = model.fit(trainloader, epochs=EPOCHS, validation_data=validloader)
+    num_train_samples = len(train_dataset)
+    num_valid_samples = len(validation_dataset)
+    _ = model.fit(trainloader, epochs=EPOCHS, validation_data=validloader, steps_per_epoch=num_train_samples // BATCH_SIZE,
+    validation_steps=num_valid_samples // BATCH_SIZE
+)
 
     _, accuracy, top_5_accuracy = model.evaluate(testloader)
     print(f"Test accuracy: {round(accuracy * 100, 2)}%")
@@ -351,15 +348,13 @@ if __name__ == "__main__":
 
 
     # Get the dataset
-    prepared_dataset = download_and_prepare_vvadlrs3()
-    (train_videos, train_labels) = prepared_dataset[0]
-    (valid_videos, valid_labels) = prepared_dataset[1]
-    (test_videos, test_labels) = prepared_dataset[2]
+    train_dataset, validation_dataset, test_dataset = download_and_prepare_vvadlrs3()
+    
 
 
-    trainloader = prepare_dataloader(train_videos, train_labels, "train")
-    validloader = prepare_dataloader(valid_videos, valid_labels, "valid")
-    testloader = prepare_dataloader(test_videos, test_labels, "test")
+    trainloader = prepare_dataloader(train_dataset, "train")
+    validloader = prepare_dataloader(validation_dataset, "valid")
+    testloader = prepare_dataloader(test_dataset, "test")
 
 
 
