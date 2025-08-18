@@ -889,7 +889,41 @@ class EFFICIENTDETD0VOC(DetectSingleShot):
 
 
 class DetectVVAD(Processor):
-    """Visual Voice Activity Detection classification and detection pipeline"""
+    """Visual Voice Activity Detection classification and detection pipeline.
+
+    # Example
+        ``` python
+        from paz.backend.camera import VideoPlayer, Camera
+        import paz.pipelines.detection as dt
+
+        detect = DetectVVAD()
+
+        pipeline = dt.DetectVVAD()
+        # To input multiple images, use a camera or a prerecorded video
+        camera = Camera(args.camera_id)
+        player = VideoPlayer((640, 480), pipeline, camera)
+        player.run()
+        ```
+
+    # Returns
+        Dictionary with ``image`` and ``boxes2D``.
+
+    # Returns
+        A function that takes an RGB image and outputs the predictions
+        as a dictionary with ``keys``: ``image`` and ``boxes2D``.
+        The corresponding values of these keys contain the image with the drawn
+        inferences and a list of ``paz.abstract.messages.Boxes2D``.
+        Note multiple images are needed to produce a prediction.
+
+    # Arguments
+        architecture: String. Name of the architecture to use. Currently supported: 'VVAD-LRS3-LSTM', 'CNN2Plus1D',
+            'CNN2Plus1D_Filters' and 'CNN2Plus1D_Light'
+        stride: Integer. How many frames are between the predictions (computational expansive (low stride) vs
+            high latency (high stride))
+        averaging_window_size: Integer. How many predictions are averaged. Set to 1 to disable averaging
+        average_type: String. 'mean' or 'weighted'. How the predictions are averaged. Set averaging_window_size to 1 to
+            disable averaging
+    """
 
     def __init__(self, architecture='CNN2Plus1D_Light', stride=2, averaging_window_size=3,
                  average_type='weighted', offsets=[0,0], colors=[[0, 255, 0], [255, 0, 0]]):
