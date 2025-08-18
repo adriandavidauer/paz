@@ -931,6 +931,7 @@ class DetectVVAD(Processor):
         self.offsets = offsets
         self.colors = colors
         
+        #detection
         self.copy = pr.Copy()
         self.detect = HaarCascadeFrontalFace()
         self.square = SequentialProcessor()
