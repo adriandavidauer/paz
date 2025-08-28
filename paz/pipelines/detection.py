@@ -926,10 +926,12 @@ class DetectVVAD(Processor):
     """
 
     def __init__(self, architecture='CNN2Plus1D_Light', stride=2, averaging_window_size=3,
-                 average_type='weighted', offsets=[0,0], colors=[[0, 255, 0], [255, 0, 0]]):
+                 average_type='weighted', offsets=[0,0], colors=[[0, 255, 0], [255, 0, 0]],min_frames=38,patience=5):
         super(DetectVVAD, self).__init__()
         self.offsets = offsets
         self.colors = colors
+        self.min_frames = int(min_frames)
+        self.patience = int(patience)
         
         #detection
         self.copy = pr.Copy()
@@ -948,7 +950,9 @@ class DetectVVAD(Processor):
             architecture=architecture
         )
         self.classifiers = []  
-        self.adders = []       
+        self.adders = [] 
+        self.frame_counts = [] 
+        self.miss_counts  = []     
 
         _tmp = ClassifyVVAD(**self.vvad_args)
         self.class_names = list(_tmp.class_names)  
@@ -964,17 +968,39 @@ class DetectVVAD(Processor):
         boxes2D = self.clip(image, boxes2D)
         cropped_images = self.crop(image, boxes2D)
 
+        N = len(cropped_images)
+
         # one (classifier, adder) pair per face slot
-        while len(self.adders) < len(cropped_images):
+        while len(self.adders) < N:
             clf = ClassifyVVAD(**self.vvad_args)
             self.classifiers.append(clf)
             self.adders.append(pr.AddClassAndScoreToBoxes(clf))
+            self.frame_counts.append(0)
+            self.miss_counts.append(0)
 
-        #classify each face independently (separate buffers) and update boxes
+        # Increment counters for the first N slots (faces we actually saw this frame)
+        for i in range(N):
+            self.frame_counts[i] += 1
+            self.miss_counts[i] = 0
+
+        # Reset counters
+        for i in range(N, len(self.adders)):
+            self.miss_counts[i] += 1
+            if self.miss_counts[i] > self.patience:
+                # clear counter and clear the VVAD temporal buffer
+                self.frame_counts[i] = 0
+                self.classifiers[i] = ClassifyVVAD(**self.vvad_args)
+                self.adders[i] = pr.AddClassAndScoreToBoxes(self.classifiers[i])
+                self.miss_counts[i] = 0
+
+        # Classify and update only the slots that have matured enough frames
         updated_boxes = []
-        for adder, crop, box in zip(self.adders, cropped_images, boxes2D):
-            updated = adder([crop], [box])  
-            updated_boxes.append(updated[0])
+        for i, (adder, crop, box) in enumerate(zip(self.adders, cropped_images, boxes2D)):
+            updated = adder([crop], [box])[0] 
+            if self.frame_counts[i] >= self.min_frames:
+                updated_boxes.append(updated)
+            else:
+                pass
         boxes2D = updated_boxes
         image = self.draw(image, boxes2D)
         return self.wrap(image, boxes2D)
