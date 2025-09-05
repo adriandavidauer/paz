@@ -999,8 +999,7 @@ class DetectVVAD(Processor):
             updated = adder([crop], [box])[0] 
             if self.frame_counts[i] >= self.min_frames:
                 updated_boxes.append(updated)
-            else:
-                pass
+
         boxes2D = updated_boxes
         image = self.draw(image, boxes2D)
         return self.wrap(image, boxes2D)
