@@ -121,3 +121,39 @@ class ClassifyVVAD(SequentialProcessor):
         self.add(pr.ControlMap(pr.FloatToBoolean(), [0], [0]))
         self.add(pr.ControlMap(pr.BooleanToTextMessage(true_message=self.class_names[0], false_message=self.class_names[1]), [0], [0]))
         self.add(pr.WrapOutput(['class_name', 'scores']))
+    
+    def reset(self):
+        """
+        Clear temporal state used by this classifier:
+        - BufferImages: rolling clip buffer and counters
+        - AveragePredictions: smoothing window
+        """
+        import numpy as np
+
+        # --- 1) Clear BufferImages inside PredictWithNones ---
+        try:
+            pwn = self.processors[0]
+            preprocess = getattr(pwn, 'preprocess', None)
+            if preprocess and hasattr(preprocess, 'processors'):
+                for proc in preprocess.processors:
+                    if proc.__class__.__name__ == 'BufferImages':
+                        proc.frames_since_last_update = 0
+                        proc.buffer_index = 0
+                        proc.is_full = False
+                        if isinstance(getattr(proc, 'buffer', None), np.ndarray):
+                            proc.buffer[...] = 0
+        except Exception:
+            # keep running even if structure differs
+            pass
+
+        #---Clear AveragePredictions (wrapped in ControlMap) ---
+        try:
+            for proc in self.processors:
+                if proc.__class__.__name__ == 'ControlMap':
+                    inner = getattr(proc, 'processor', None)
+                    if inner and inner.__class__.__name__ == 'AveragePredictions':
+                        if hasattr(inner, 'predictions'):
+                            inner.predictions.clear()
+        except Exception:
+            pass
+
