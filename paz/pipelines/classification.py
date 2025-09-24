@@ -4,6 +4,7 @@ from . import PreprocessImage
 from ..models.classification import MiniXception, VVAD_LRS3_LSTM, CNN2Plus1D
 from ..datasets import get_class_names
 from .keypoints import MinimalHandPoseEstimation
+import numpy as np
 
 
 # neutral, happiness, surprise, sadness, anger, disgust, fear, contempt
@@ -110,11 +111,14 @@ class ClassifyVVAD(SequentialProcessor):
         self.class_names = get_class_names('VVAD_LRS3')
 
         preprocess = PreprocessImage(input_size[1:3], (0.0, 0.0, 0.0))
-        preprocess.add(pr.BufferImages(input_size, stride=stride))
+        self.buffer_images = pr.BufferImages(input_size, stride=stride)
+        preprocess.add(self.buffer_images)
+
         self.add(pr.PredictWithNones(self.classifier, preprocess))
 
-        weighted_mean = average_type == 'weighted'
-        self.add(pr.ControlMap(pr.AveragePredictions(averaging_window_size, weighted_mean), [0], [0]))
+        weighted_mean = (average_type == 'weighted')
+        self.avg = pr.AveragePredictions(averaging_window_size, weighted_mean)
+        self.add(pr.ControlMap(self.avg, [0], [0]))
 
         self.add(pr.ControlMap(pr.NoneConverter(), [0], [0]))
         self.add(pr.CopyDomain([0], [1]))
@@ -123,37 +127,13 @@ class ClassifyVVAD(SequentialProcessor):
         self.add(pr.WrapOutput(['class_name', 'scores']))
     
     def reset(self):
-        """
-        Clear temporal state used by this classifier:
-        - BufferImages: rolling clip buffer and counters
-        - AveragePredictions: smoothing window
-        """
-        import numpy as np
+        """Clear temporal state: clip buffer (BufferImages) and score window (AveragePredictions)."""
+        # BufferImages
+        self.buffer_images.frames_since_last_update = 0
+        self.buffer_images.buffer_index = 0
+        self.buffer_images.is_full = False
+        if isinstance(self.buffer_images.buffer, np.ndarray):
+            self.buffer_images.buffer[...] = 0
 
-        # --- 1) Clear BufferImages inside PredictWithNones ---
-        try:
-            pwn = self.processors[0]
-            preprocess = getattr(pwn, 'preprocess', None)
-            if preprocess and hasattr(preprocess, 'processors'):
-                for proc in preprocess.processors:
-                    if proc.__class__.__name__ == 'BufferImages':
-                        proc.frames_since_last_update = 0
-                        proc.buffer_index = 0
-                        proc.is_full = False
-                        if isinstance(getattr(proc, 'buffer', None), np.ndarray):
-                            proc.buffer[...] = 0
-        except Exception:
-            # keep running even if structure differs
-            pass
-
-        #---Clear AveragePredictions (wrapped in ControlMap) ---
-        try:
-            for proc in self.processors:
-                if proc.__class__.__name__ == 'ControlMap':
-                    inner = getattr(proc, 'processor', None)
-                    if inner and inner.__class__.__name__ == 'AveragePredictions':
-                        if hasattr(inner, 'predictions'):
-                            inner.predictions.clear()
-        except Exception:
-            pass
-
+        # AveragePredictions
+        self.avg.predictions.clear()
