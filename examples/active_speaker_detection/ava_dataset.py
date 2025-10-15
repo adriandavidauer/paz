@@ -5,23 +5,29 @@ import numpy as np
 import tensorflow as tf
 import logging
 
+"""
+Do not know how the files or dataset is supposed to be used with the model, does it need extracted videos or frames.
+Which models do i need to look at for writing this code. Need to understand how the model input works. I could only find VVAD3 model. Do we have an example of the model that we would be using for reference?"""
 class AvaDataset:
     def __init__(self,
                  root_dir="ava_data",
                  file_list_url="https://s3.amazonaws.com/ava-dataset/annotations/ava_speech_file_names_v1.txt",
-                 video_url_template="https://s3.amazonaws.com/ava-dataset/trainval/{}", log_level=logging.INFO):
+                 video_url_template="https://s3.amazonaws.com/ava-dataset/trainval/{}",target_fps=1,resize=(224, 224), log_level=logging.INFO):
         self.root_dir = root_dir
         self.video_dir = os.path.join(root_dir, "videos")
         self.csv_dir = os.path.join(root_dir, "annotations")
+        self.target_fps = target_fps
+        self.resize = resize
         os.makedirs(self.video_dir, exist_ok=True)
         os.makedirs(self.csv_dir, exist_ok=True)
         self.file_list_path = os.path.join(self.csv_dir, "ava_speech_file_names_v1.txt")
 
         self.file_list_url = file_list_url
         self.video_url_template = video_url_template
-
-        self.file_names = self._load_file_list()
         self.logger = logging.getLogger("AvaDataset")
+        
+        self.file_names = self._load_file_list()
+        
         if not self.logger.hasHandlers():
             handler = logging.StreamHandler()
             formatter = logging.Formatter("[%(levelname)s] %(message)s")
@@ -41,17 +47,17 @@ class AvaDataset:
     def _download_video(self, file_name):
         local_path = os.path.join(self.video_dir, file_name)
         if os.path.exists(local_path):
-            self.logger.debug(f"Video already exists: {file_name}")
+            self.logger.info(f"Video already exists: {file_name}")
             return local_path
         url = self.video_url_template.format(file_name)
-        self.logger.debug(f"Downloading video: {file_name}")
+        self.logger.info(f"Downloading video: {file_name}")
         urllib.request.urlretrieve(url, local_path)
         return local_path
 
     def _load_annotation_csv(self, video_name):
         csv_path = os.path.join(self.csv_dir, f"{video_name}-activespeaker.csv")
         if not os.path.exists(csv_path):
-            self.logger.warning(f"CSV annotations not found for video {video_name}")
+            self.logger.warning(f"CSV annotations not found for video {csv_path}")
             return []
         annots = []
         with open(csv_path, "r") as f:
@@ -104,16 +110,18 @@ class AvaDataset:
     def _generator(self):
         for idx, file_name in enumerate(self.file_names):
             video_name = os.path.splitext(file_name)[0]
-            video_path = self._download_video(file_name)
             annots = self._load_annotation_csv(video_name)
+            if annots == []:
+                continue
+            video_path = self._download_video(file_name)
             frames = self._extract_frames(video_path)
-            difficulty = self._compute_difficulty(frames)
+            #difficulty = self._compute_difficulty(frames)
             labels = np.array([self._map_label(a["label"]) for a in annots[:len(frames)]], dtype=np.int32)
             frames_np = np.stack(frames).astype(np.uint8)
             yield {
                 "frames": frames_np,
                 "labels": labels,
-                "difficulty": np.float32(difficulty["difficulty"])
+                #"difficulty": np.float32(difficulty["difficulty"])
             }
 
     def _map_label(self, label):
@@ -140,7 +148,8 @@ class AvaDataset:
             ds = ds.shuffle(buffer_size=4)
         ds = ds.map(lambda x: {"frames": tf.image.convert_image_dtype(x["frames"], tf.float32),
                                "labels": x["labels"],
-                               "difficulty": x["difficulty"]},
+                               #"difficulty": x["difficulty"]
+                              },
                     num_parallel_calls=num_parallel_calls)
         ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
         return ds
