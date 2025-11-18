@@ -5,9 +5,6 @@ import numpy as np
 import tensorflow as tf
 import logging
 
-"""
-Do not know how the files or dataset is supposed to be used with the model, does it need extracted videos or frames.
-Which models do i need to look at for writing this code. Need to understand how the model input works. I could only find VVAD3 model. Do we have an example of the model that we would be using for reference?"""
 class AvaDataset:
     def __init__(self,
                  root_dir="ava_data",
