@@ -12,7 +12,7 @@ class AvaDataset:
     def __init__(self,
                  root_dir="ava_data",
                  file_list_url="https://s3.amazonaws.com/ava-dataset/annotations/ava_speech_file_names_v1.txt",
-                 video_url_template="https://s3.amazonaws.com/ava-dataset/trainval/{}",target_fps=1,resize=(224, 224), log_level=logging.INFO):
+                 video_url_template="https://s3.amazonaws.com/ava-dataset/trainval/{}",target_fps=25,resize=None, log_level=logging.INFO):
         self.root_dir = root_dir
         self.video_dir = os.path.join(root_dir, "videos")
         self.csv_dir = os.path.join(root_dir, "annotations")
@@ -75,19 +75,38 @@ class AvaDataset:
 
     def _extract_frames(self, video_path):
         cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f'Could not open video file: {video_path}')
+        
         frames = []
         fps = cap.get(cv2.CAP_PROP_FPS) or self.target_fps
+        if fps <= 0:
+            fps = self.target_fps
+            self.logger.warning(f'Could not read FPS from video, using target_fps: {fps}')
+        
         interval = max(1, int(fps / self.target_fps))
         count = 0
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
+            if frame is None or frame.size == 0:
+                self.logger.warning(f'Skipping empty frame at count {count}')
+                count += 1
+                continue
             if count % interval == 0:
-                frame_resized = cv2.resize(frame, self.resize)
-                frames.append(frame_resized)
+                # Keep original resolution unless resize is explicitly specified
+                if self.resize is not None and self.resize != (frame.shape[1], frame.shape[0]):
+                    frame_resized = cv2.resize(frame, self.resize)
+                    frames.append(frame_resized)
+                else:
+                    frames.append(frame)
             count += 1
         cap.release()
+        
+        if len(frames) == 0:
+            self.logger.warning(f'No frames extracted from video: {video_path}')
+        
         return frames
 
     def _compute_difficulty(self, frames):
