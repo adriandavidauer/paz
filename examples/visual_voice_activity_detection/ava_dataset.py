@@ -172,3 +172,15 @@ class AvaDataset:
 
     def __len__(self):
         return len(self.file_names)
+    
+    def download_all_videos(self):
+        for file_name in self.file_names:
+            self._download_video(file_name)
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Download AVA Dataset Videos")
+    parser.add_argument("--root_dir", type=str, default="ava_data", help="Root directory for AVA dataset")
+    args = parser.parse_args()
+    dataset = AvaDataset(root_dir=args.root_dir)
+    dataset.download_all_videos()
