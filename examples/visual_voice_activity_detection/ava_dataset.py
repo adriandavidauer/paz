@@ -174,6 +174,9 @@ class AvaDataset:
         return len(self.file_names)
     
     def download_all_videos(self):
+        """
+        Downloads all videos in the dataset.
+        """
         for file_name in self.file_names:
             self._download_video(file_name)
 
