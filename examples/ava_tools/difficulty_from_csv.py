@@ -33,8 +33,13 @@ def load_ava_as(csv_path):
 
 def compute_difficulty(rows):
     """
-    rows: list of dicts for one video (ts, box, label, ent)
-    returns a dict of metrics
+    Compute difficulty metrics for a single video based on bounding boxes and labels.
+    Metrics:
+      - diversity: number of unique tracked entities (proxy for people)
+      - interactivity_avg / max: average and max faces per frame
+      - dynamics: average motion between frames (1 - IoU)
+      - occlusion: average overlap between faces
+      - audibility_sna_share: share of non-audible speaking labels
     """
     # group by timestamp
     by_ts = defaultdict(list)
@@ -110,5 +115,14 @@ if __name__ == "__main__":
         for csv_path in sorted(glob.glob(os.path.join(path, "*.csv"))):
             process_csv(csv_path)
 
-    print(json.dumps(out, indent=2))
+    # Save JSON next to this script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    out_file = os.path.join(script_dir, "difficulty_ava_test.json")
+
+    with open(out_file, "w") as f:
+        json.dump(out, f, indent=2)
+
+    print(f"Saved difficulty metrics to: {out_file}")
+
+
 
