@@ -15,6 +15,20 @@ def iou(boxA, boxB):
     return inter / union
 
 def load_ava_as(csv_path):
+    """Load Active Speaker CSV annotations.
+
+    # Arguments
+        csv_path: String. Path to a single AVA CSV file.
+
+    # Returns
+        Dictionary mapping video_id → list of annotation dictionaries.
+        Each annotation contains:
+            - ts: Float timestamp
+            - box: Tuple (x1, y1, x2, y2)
+            - label: String
+            - ent: String entity id
+    """
+
     by_vid = defaultdict(list)
     with open(csv_path, newline='') as f:
         r = csv.reader(f)
@@ -32,15 +46,23 @@ def load_ava_as(csv_path):
     return by_vid
 
 def compute_difficulty(rows):
+    """Compute difficulty metrics for one video.
+
+    # Arguments
+        rows: List of dictionaries. Each contains timestamp, bounding box,
+              label, and entity ID for that video.
+
+    # Returns
+        Dictionary with:
+            - diversity: Int. Count of unique entity IDs.
+            - interactivity_avg: Float. Avg faces per frame.
+            - interactivity_max: Int. Max faces per frame.
+            - dynamics_mean: Float. Mean motion (1 - IoU).
+            - dynamics_var: Float. Variance of motion.
+            - occlusion: Float. Avg pairwise IoU per frame.
+            - audibility_sna_share: Float. Ratio of NOT_AUDIBLE speech.
     """
-    Compute difficulty metrics for a single video based on bounding boxes and labels.
-    Metrics:
-      - diversity: number of unique tracked entities (proxy for people)
-      - interactivity_avg / max: average and max faces per frame
-      - dynamics: average motion between frames (1 - IoU)
-      - occlusion: average overlap between faces
-      - audibility_sna_share: share of non-audible speaking labels
-    """
+
     # group by timestamp
     by_ts = defaultdict(list)
     entities = set()
