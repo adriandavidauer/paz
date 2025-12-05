@@ -1,38 +1,84 @@
 import os
 import urllib.request
+import tarfile
+from datetime import datetime
 import cv2
 import numpy as np
 import tensorflow as tf
 import logging
 
 class AvaDataset:
+    """Dataset loader for AVA active speaker detection dataset."""
+    
     def __init__(self,
                  root_dir="ava_data",
                  file_list_url="https://s3.amazonaws.com/ava-dataset/annotations/ava_speech_file_names_v1.txt",
-                 video_url_template="https://s3.amazonaws.com/ava-dataset/trainval/{}",target_fps=25,resize=None, log_level=logging.INFO):
+                 video_url_template="https://s3.amazonaws.com/ava-dataset/trainval/{}",
+                 annotations_url="https://research.google.com/ava/download/ava_activespeaker_val_v1.0.tar.bz2",
+                 target_fps=25,resize=None, log_level=logging.INFO, log_dir="logs"):
+        """Initialize AVA dataset loader."""
         self.root_dir = root_dir
         self.video_dir = os.path.join(root_dir, "videos")
         self.csv_dir = os.path.join(root_dir, "annotations")
+        self.log_dir = log_dir
         self.target_fps = target_fps
         self.resize = resize
         os.makedirs(self.video_dir, exist_ok=True)
         os.makedirs(self.csv_dir, exist_ok=True)
+        os.makedirs(self.log_dir, exist_ok=True)
         self.file_list_path = os.path.join(self.csv_dir, "ava_speech_file_names_v1.txt")
 
         self.file_list_url = file_list_url
         self.video_url_template = video_url_template
+        self.annotations_url = annotations_url
         self.logger = logging.getLogger("AvaDataset")
         
+        if not self.logger.hasHandlers():
+            formatter = logging.Formatter("[%(levelname)s] %(message)s")
+            
+            # File handler
+            log_file = os.path.join(self.log_dir, f"ava_dataset_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
+        
+        self.logger.setLevel(log_level)
+        
+        self._download_annotations()
         self.file_names = self._load_file_list()
         
-        if not self.logger.hasHandlers():
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter("[%(levelname)s] %(message)s")
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
-        self.logger.setLevel(log_level)
+        self.download_all_videos()
+
+    def _download_annotations(self):
+        """Download and extract annotation CSV files if directory is empty."""
+        csv_files = [f for f in os.listdir(self.csv_dir) if f.endswith('.csv') and os.path.isfile(os.path.join(self.csv_dir, f))]
+        
+        if len(csv_files) == 0:
+            self.logger.info("Downloading annotation CSV files...")
+            tar_path = os.path.join(self.root_dir, "ava_activespeaker_val_v1.0.tar.bz2")
+            urllib.request.urlretrieve(self.annotations_url, tar_path)
+            with tarfile.open(tar_path, 'r:bz2') as tar:
+                tar.extractall(self.csv_dir)
+            
+            # Move CSV files from subdirectories to csv_dir directly
+            for root, dirs, files in os.walk(self.csv_dir):
+                if root != self.csv_dir:
+                    for file in files:
+                        if file.endswith('.csv'):
+                            src = os.path.join(root, file)
+                            dst = os.path.join(self.csv_dir, file)
+                            os.rename(src, dst)
+                    # Remove empty subdirectories
+                    if not os.listdir(root):
+                        os.rmdir(root)
+            
+            os.remove(tar_path)
+            self.logger.info("Annotation CSV files extracted.")
+        else:
+            self.logger.info("Annotation CSV files already exist.")
 
     def _load_file_list(self):
+        """Load video file names from file list."""
         if not os.path.exists(self.file_list_path):
             self.logger.info("Downloading AVA file list...")
             urllib.request.urlretrieve(self.file_list_url, self.file_list_path)
@@ -42,6 +88,7 @@ class AvaDataset:
         return file_names
 
     def _download_video(self, file_name):
+        """Download video file if not already present."""
         local_path = os.path.join(self.video_dir, file_name)
         if os.path.exists(local_path):
             self.logger.info(f"Video already exists: {file_name}")
@@ -52,6 +99,7 @@ class AvaDataset:
         return local_path
 
     def _load_annotation_csv(self, video_name):
+        """Load annotation CSV for a video."""
         csv_path = os.path.join(self.csv_dir, f"{video_name}-activespeaker.csv")
         if not os.path.exists(csv_path):
             self.logger.warning(f"CSV annotations not found for video {csv_path}")
@@ -71,6 +119,7 @@ class AvaDataset:
         return annots
 
     def _extract_frames(self, video_path):
+        """Extract frames from video at target FPS."""
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise ValueError(f'Could not open video file: {video_path}')
@@ -107,23 +156,11 @@ class AvaDataset:
         return frames
 
     def _compute_difficulty(self, frames):
-        motion_vals = []
-        face_counts = []
-        prev_gray = None
-        for frame in frames:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            if prev_gray is not None:
-                motion_vals.append(np.mean(cv2.absdiff(prev_gray, gray)))
-            prev_gray = gray
-            if self.face_cascade:
-                faces = self.face_cascade.detectMultiScale(gray, 1.1, 5)
-                face_counts.append(len(faces))
-        motion_score = float(np.mean(motion_vals)) if motion_vals else 0.0
-        face_score = float(np.mean(face_counts)) if face_counts else 0.0
-        difficulty = 0.7 * motion_score + 0.3 * face_score
-        return {"motion": motion_score, "faces": face_score, "difficulty": difficulty}
+        """Compute difficulty score for frames (placeholder)."""
+        pass
 
     def _generator(self):
+        """Generator that yields video frames and labels."""
         for idx, file_name in enumerate(self.file_names):
             video_name = os.path.splitext(file_name)[0]
             annots = self._load_annotation_csv(video_name)
@@ -141,6 +178,7 @@ class AvaDataset:
             }
 
     def _map_label(self, label):
+        """Map label string to integer."""
         label_map = {
             "SPEAKING_AND_AUDIBLE": 2,
             "SPEAKING_BUT_NOT_AUDIBLE": 1,
@@ -149,6 +187,7 @@ class AvaDataset:
         return label_map.get(label, 0)
 
     def as_tf_dataset(self, batch_size=2, shuffle=True, num_parallel_calls=tf.data.AUTOTUNE):
+        """Convert dataset to TensorFlow dataset."""
         sample_video = self._generator().__next__()
         num_frames, h, w, _ = sample_video["frames"].shape
 
@@ -171,14 +210,18 @@ class AvaDataset:
         return ds
 
     def __len__(self):
+        """Return number of videos in dataset."""
         return len(self.file_names)
     
     def download_all_videos(self):
-        """
-        Downloads all videos in the dataset.
-        """
-        for file_name in self.file_names:
-            self._download_video(file_name)
+        """Download all videos in the dataset if video_dir is empty."""
+        video_files = [f for f in os.listdir(self.video_dir) if os.path.isfile(os.path.join(self.video_dir, f))]
+        
+        if len(video_files) == 0:
+            for file_name in self.file_names:
+                self._download_video(file_name)
+        else:
+            self.logger.info("Video directory is not empty. Skipping download.")
 
 if __name__ == "__main__":
     import argparse
@@ -186,4 +229,3 @@ if __name__ == "__main__":
     parser.add_argument("--root_dir", type=str, default="ava_data", help="Root directory for AVA dataset")
     args = parser.parse_args()
     dataset = AvaDataset(root_dir=args.root_dir)
-    dataset.download_all_videos()
