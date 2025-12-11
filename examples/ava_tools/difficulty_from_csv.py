@@ -1,34 +1,24 @@
 import csv
 from collections import defaultdict
-from statistics import mean
+from statistics import mean,variance
+from paz.backend.boxes import compute_iou,compute_ious
+import numpy as np
 
-def iou(boxA, boxB):
-    ax1, ay1, ax2, ay2 = boxA
-    bx1, by1, bx2, by2 = boxB
-    inter_x1, inter_y1 = max(ax1, bx1), max(ay1, by1)
-    inter_x2, inter_y2 = min(ax2, bx2), min(ay2, by2)
-    iw, ih = max(0.0, inter_x2 - inter_x1), max(0.0, inter_y2 - inter_y1)
-    inter = iw * ih
-    areaA = max(0.0, ax2-ax1) * max(0.0, ay2-ay1)
-    areaB = max(0.0, bx2-bx1) * max(0.0, by2-by1)
-    union = areaA + areaB - inter + 1e-8
-    return inter / union
 
 def load_ava_as(csv_path):
     """Load Active Speaker CSV annotations.
 
     # Arguments
-        csv_path: String. Path to a single AVA CSV file.
+        csv_path: String. Path to a single AVA ActiveSpeaker CSV file.
 
     # Returns
-        Dictionary mapping video_id → list of annotation dictionaries.
-        Each annotation contains:
-            - ts: Float timestamp
-            - box: Tuple (x1, y1, x2, y2)
-            - label: String
-            - ent: String entity id
+        Dictionary mapping video_id to a list of annotation dictionaries.
+        Each annotation dictionary contains:
+            - 'ts': Float. Timestamp.
+            - 'box': Tuple of four floats (x1, y1, x2, y2).
+            - 'label': String. Active speaker label.
+            - 'ent': String. Entity / track identifier.
     """
-
     by_vid = defaultdict(list)
     with open(csv_path, newline='') as f:
         r = csv.reader(f)
@@ -46,23 +36,26 @@ def load_ava_as(csv_path):
     return by_vid
 
 def compute_difficulty(rows):
-    """Compute difficulty metrics for one video.
+    """Compute difficulty metrics for a single video.
 
     # Arguments
-        rows: List of dictionaries. Each contains timestamp, bounding box,
-              label, and entity ID for that video.
+        rows: List of dictionaries for one video. Each dictionary contains:
+            - 'ts': Float. Timestamp.
+            - 'box': Tuple of four floats (x1, y1, x2, y2).
+            - 'label': String. Active speaker label.
+            - 'ent': String. Entity / track identifier.
 
     # Returns
         Dictionary with:
-            - diversity: Int. Count of unique entity IDs.
-            - interactivity_avg: Float. Avg faces per frame.
-            - interactivity_max: Int. Max faces per frame.
-            - dynamics_mean: Float. Mean motion (1 - IoU).
-            - dynamics_var: Float. Variance of motion.
-            - occlusion: Float. Avg pairwise IoU per frame.
-            - audibility_sna_share: Float. Ratio of NOT_AUDIBLE speech.
+            diversity: Int. Number of unique entity IDs(proxy for people).
+            interactivity_avg: Float. Average number of faces per frame.
+            interactivity_max: Int. Maximum number of faces in any frame.
+            audibility_sna_share: Float. Ratio of NOT_AUDIBLE speech among all
+                speaking labels in [0, 1].
+            occlusion: Float. Average pairwise IoU across all face pairs.
+            dynamics_mean: Float. Mean motion measure (1 - IoU) over time.
+            dynamics_var: Float. Variance of the motion measure.
     """
-
     # group by timestamp
     by_ts = defaultdict(list)
     entities = set()
@@ -78,10 +71,20 @@ def compute_difficulty(rows):
     # diversity
     diversity = len(entities)
 
-    # audibility: share of SPEAKING_NOT_AUDIBLE among speaking frames
-    speak = [r for r in rows if r['label'].startswith('SPEAKING')]
-    sna = [r for r in speak if 'NOT_AUDIBLE' in r['label']]
-    audibility_sna_share = (len(sna) / len(speak)) if speak else 0.0
+    # audibility: percentage of SPEAKING_NOT_AUDIBLE among all speaking
+    speak_na = [
+        r for r in rows
+        if r['label'].startswith('SPEAKING') and 'NOT_AUDIBLE' in r['label']
+    ]
+    speak_audible = [
+        r for r in rows
+        if r['label'].startswith('SPEAKING') and 'AUDIBLE' in r['label']
+    ]
+    total_speaking = len(speak_na) + len(speak_audible)
+    audibility_sna_share = (
+        len(speak_na) / total_speaking if total_speaking else 0.0
+    )
+
 
     # dynamics: mean (1 - IoU) per entity over successive frames
     by_ent = defaultdict(list)
@@ -91,25 +94,35 @@ def compute_difficulty(rows):
     for ent, seq in by_ent.items():
         seq.sort(key=lambda d: d['ts'])
         for i in range(1, len(seq)):
-            iou_val = iou(seq[i-1]['box'], seq[i]['box'])
+            # inside the loop
+            prev_box = np.array(seq[i-1]['box'], dtype=float)
+            curr_box = np.array([seq[i]['box']], dtype=float)  # shape (1, 4)
+            iou_val = float(compute_iou(prev_box, curr_box)[0])
             dynamics_terms.append(1.0 - iou_val)
-    dynamics = mean(dynamics_terms) if dynamics_terms else 0.0
+
+    if dynamics_terms:
+        dynamics_mean = mean(dynamics_terms)
+        dynamics_var = variance(dynamics_terms) if len(dynamics_terms) > 1 else 0.0
+    else:
+        dynamics_mean = 0.0
+        dynamics_var = 0.0
 
     # occlusion: average pairwise IoU per frame when >=2 faces
     occlusion_terms = []
+
     for ts, dets in by_ts.items():
         n = len(dets)
         if n < 2:
             continue
-        boxes = [d['box'] for d in dets]
-        # average over all pairs
-        s, c = 0.0, 0
-        for i in range(n):
-            for j in range(i+1, n):
-                s += iou(boxes[i], boxes[j])
-                c += 1
-        if c:
-            occlusion_terms.append(s / c)
+
+        boxes = np.array([d['box'] for d in dets], dtype=float)  # (n, 4)
+        ious = compute_ious(boxes, boxes)  # (n, n)
+
+        # take only upper triangle (i<j) to avoid self and double counting
+        upper = ious[np.triu_indices(n, k=1)]
+        if upper.size > 0:
+            occlusion_terms.append(float(upper.mean()))
+
     occlusion = mean(occlusion_terms) if occlusion_terms else 0.0
 
     return dict(
@@ -118,13 +131,31 @@ def compute_difficulty(rows):
         interactivity_max=interactivity_max,
         audibility_sna_share=audibility_sna_share,
         occlusion=occlusion,
-        dynamics=dynamics
+        dynamics_mean=dynamics_mean,
+        dynamics_var=dynamics_var
     )
 
 if __name__ == "__main__":
-    import sys, os, json, glob
-    path = sys.argv[1]  
+    import os
+    import json
+    import glob
+    import argparse
 
+    parser = argparse.ArgumentParser(
+        description='Compute difficulty metrics from AVA ActiveSpeaker CSV files.'
+    )
+    parser.add_argument(
+        'path',
+        help='Path to a single AVA CSV file or a directory containing multiple CSV files.'
+    )
+    parser.add_argument(
+        '--output', '-o',
+        required=True,
+        help='Output JSON file path.'
+    )
+    args = parser.parse_args()
+
+    path = args.path
     out = {}
 
     def process_csv(csv_path):
@@ -136,10 +167,11 @@ if __name__ == "__main__":
         # Process every *.csv in the folder
         for csv_path in sorted(glob.glob(os.path.join(path, "*.csv"))):
             process_csv(csv_path)
+    else:
+        # Single CSV file
+        process_csv(path)
 
-    # Save JSON next to this script
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    out_file = os.path.join(script_dir, "difficulty_ava_test.json")
+    out_file = args.output
 
     with open(out_file, "w") as f:
         json.dump(out, f, indent=2)
