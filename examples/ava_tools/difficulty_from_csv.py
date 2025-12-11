@@ -142,17 +142,14 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Compute difficulty metrics from AVA ActiveSpeaker CSV files.'
-    )
+        description='Compute difficulty metrics from AVA ActiveSpeaker CSV files.')
     parser.add_argument(
         'path',
-        help='Path to a single AVA CSV file or a directory containing multiple CSV files.'
-    )
+        help='Path to a single AVA CSV file or a directory containing multiple CSV files.')
     parser.add_argument(
         '--output', '-o',
-        required=True,
-        help='Output JSON file path.'
-    )
+        help=('Output JSON file path. '
+              'Defaults to "difficulty_ava_test.json" next to this script.'))
     args = parser.parse_args()
 
     path = args.path
@@ -171,12 +168,11 @@ if __name__ == "__main__":
         # Single CSV file
         process_csv(path)
 
-    out_file = args.output
+    # Save JSON next to this script by default
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    out_file = args.output or os.path.join(script_dir, "difficulty_ava_test.json")
 
     with open(out_file, "w") as f:
         json.dump(out, f, indent=2)
 
     print(f"Saved difficulty metrics to: {out_file}")
-
-
-
