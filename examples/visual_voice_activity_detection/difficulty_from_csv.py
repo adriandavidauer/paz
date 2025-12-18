@@ -190,17 +190,17 @@ if __name__ == "__main__":
             mins[m] = min(vals)
             maxs[m] = max(vals)
 
-        def minmax(x, m):
-            xmin, xmax = mins[m], maxs[m]
+        def minmax(x, xmin, xmax):
             if xmax == xmin:
                 return 0.0
             return (x - xmin) / (xmax - xmin)
-
+        
         # add normalized versions with *_norm suffix
         for vid, metrics in out.items():
             for m in metric_names:
                 if m in metrics and m in mins:
-                    metrics[m + '_norm'] = minmax(metrics[m], m)
+                    metrics[m + '_norm'] = minmax(metrics[m], mins[m], maxs[m])
+
 
     # Save JSON next to this script by default
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -210,3 +210,4 @@ if __name__ == "__main__":
         json.dump(out, f, indent=2)
 
     print(f"Saved difficulty metrics to: {out_file}")
+
