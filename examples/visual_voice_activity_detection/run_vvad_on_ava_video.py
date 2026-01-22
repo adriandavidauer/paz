@@ -3,6 +3,7 @@ import argparse
 import cv2
 import numpy as np
 import logging
+import time
 from collections import defaultdict
 from datetime import datetime
 
@@ -468,8 +469,7 @@ def print_entity_accuracy(entity_tracking):
             gt_labels_all = entity_tracking['entity_gt_labels_all'][entity_id]
             print(f'  Entity {entity_id}:')
             print(f'    No matches: 0/{gt_total} GT annotations matched')
-            print(f'    Ground Truth (all from CSV): speaking-audible={gt_labels_all.get("speaking-audible", 0)}, '
-                  f'speaking-not-audible={gt_labels_all.get("speaking-not-audible", 0)}, '
+            print(f'    Ground Truth (all from CSV): speaking={gt_labels_all.get("speaking", 0)}, '
                   f'not-speaking={gt_labels_all.get("not-speaking", 0)}')
     
     _print_entity_summary(entity_tracking)
@@ -611,6 +611,7 @@ def initialize_statistics():
         'total_correct': 0,
         'speaking_count': 0,
         'not_speaking_count': 0,
+        'total_prediction_time': 0.0,
         'entity_tracking': initialize_entity_tracking()
     }
 
@@ -730,6 +731,9 @@ def evaluate_frame(frame_count, pred_boxes, timestamp_to_annotations, width, hei
 def process_video_frames(cap, writer, pipeline, timestamp_to_annotations, eval_frame_indices,
                         width, height, dataset: AvaDataset, iou_threshold, stats):
     """Process all video frames and perform evaluation."""
+    # Start timing
+    start_time = time.time()
+    
     frame_count = 0
     max_frame = max(eval_frame_indices) if eval_frame_indices else 0
     
@@ -741,6 +745,10 @@ def process_video_frames(cap, writer, pipeline, timestamp_to_annotations, eval_f
         frame_count = _process_single_frame(frame_bgr, frame_count, writer, pipeline,
                                            timestamp_to_annotations, eval_frame_indices,
                                            width, height, dataset, iou_threshold, stats)
+    
+    # End timing and store total prediction time
+    end_time = time.time()
+    stats['total_prediction_time'] = end_time - start_time
     
     return frame_count
 
@@ -802,6 +810,19 @@ def _print_basic_stats(video_path, output_path, frame_count, fps, eval_frame_ind
     print(f'  Total predictions: {stats["total_predictions"]}')
     print(f'  Total matched boxes: {stats["total_matched"]}')
     print(f"  speaking: {stats['speaking_count']}, not-speaking: {stats['not_speaking_count']}")
+    
+    # Display total prediction time
+    total_time = stats.get('total_prediction_time', 0.0)
+    if total_time > 0:
+        hours = int(total_time // 3600)
+        minutes = int((total_time % 3600) // 60)
+        seconds = total_time % 60
+        if hours > 0:
+            print(f'  Total prediction time: {hours}h {minutes}m {seconds:.2f}s ({total_time:.2f} seconds)')
+        elif minutes > 0:
+            print(f'  Total prediction time: {minutes}m {seconds:.2f}s ({total_time:.2f} seconds)')
+        else:
+            print(f'  Total prediction time: {total_time:.2f} seconds')
 
 
 def _print_accuracy_stats(accuracy, stats):
