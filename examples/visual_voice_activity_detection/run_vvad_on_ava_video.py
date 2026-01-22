@@ -55,7 +55,9 @@ def parse_args():
     parser.add_argument('--video', type=str, default=None,
                         help='Path to a specific AVA video file to process')
     parser.add_argument('--output', type=str, default=None,
-                        help='Output video path (default: <video_basename>_vvad.mp4)')
+                        help='Output video path (default: <video_basename>_vvad.<ext>)')
+    parser.add_argument('--output_ext', type=str, default='mp4',
+                        help='Output video file extension (default: mp4). Options: mp4, avi, mov, mkv')
     parser.add_argument('--iou_threshold', type=float, default=0.5,
                         help='IoU threshold for matching predicted boxes to GT boxes')
     parser.add_argument('--log_file', type=str, default=None,
@@ -323,18 +325,23 @@ def _convert_single_box_to_pixel(gt_ann, width, height, dataset: AvaDataset):
         x_max_norm * width, y_max_norm * height
     )
     
+    # Convert label using dataset mapping
+    csv_label = gt_ann['label']
+    numeric_label = dataset._map_label(csv_label)
+    gt_vvad_label = _map_ava_to_vvad_text(numeric_label)
+    
     # Debug: print coordinate conversion
     logger.debug(f"Converting GT box for entity {gt_ann['entity_id']}:")
     logger.debug(f"  Normalized: {gt_ann['bbox_normalized']}")
     logger.debug(f"  Pixel: {bbox_pixel}")
     logger.debug(f"  Image size: {width}x{height}")
-    logger.debug(f"  Label: {gt_ann['label']} -> {_map_ava_to_vvad_text(dataset._map_label(gt_ann['label']))}")
+    logger.debug(f"  Label: {csv_label} -> {gt_vvad_label} (numeric: {numeric_label})")
     
     return {
         'bbox_pixel': bbox_pixel,
         'label': gt_ann['label'],
         'entity_id': gt_ann['entity_id'],
-        'gt_vvad_label': _map_ava_to_vvad_text(dataset._map_label(gt_ann['label']))
+        'gt_vvad_label': gt_vvad_label
     }
 
 
@@ -430,9 +437,9 @@ def initialize_entity_tracking():
         'entity_correct': defaultdict(int),
         'entity_matched': defaultdict(int),
         'entity_labels': defaultdict(lambda: defaultdict(int)),
-        'entity_gt_labels': defaultdict(lambda: defaultdict(int)),  # GT labels for matched annotations (mapped to VVAD)
+        'entity_gt_labels': defaultdict(lambda: defaultdict(int)),  # GT labels for matched annotations (mapped to VVAD: 'speaking' or 'not-speaking')
         'entity_gt_total': defaultdict(int),  # Total GT annotations per entity from CSV
-        'entity_gt_labels_all': defaultdict(lambda: defaultdict(int))  # All GT labels from CSV (original AVA labels)
+        'entity_gt_labels_all': defaultdict(lambda: defaultdict(int))  # All GT labels from CSV (mapped: 'speaking' or 'not-speaking')
     }
 
 
@@ -494,8 +501,7 @@ def _print_single_entity_stats(entity_id, entity_tracking):
           f'not-speaking={pred_labels.get("not-speaking", 0)}')
     print(f'    Ground Truth (matched): speaking={gt_labels.get("speaking", 0)}, '
           f'not-speaking={gt_labels.get("not-speaking", 0)}')
-    print(f'    Ground Truth (all from CSV): speaking-audible={gt_labels_all.get("speaking-audible", 0)}, '
-          f'speaking-not-audible={gt_labels_all.get("speaking-not-audible", 0)}, '
+    print(f'    Ground Truth (all from CSV): speaking={gt_labels_all.get("speaking", 0)}, '
           f'not-speaking={gt_labels_all.get("not-speaking", 0)}')
 
 
@@ -544,17 +550,34 @@ def setup_evaluation(video_path: str, dataset: AvaDataset):
     return pipeline, video_name, annots
 
 
+def get_video_codec(output_path: str):
+    """Get appropriate video codec based on output file extension."""
+    _, ext = os.path.splitext(output_path.lower())
+    
+    codec_map = {
+        '.mp4': 'mp4v',  # MPEG-4 codec
+        '.avi': 'XVID',  # Xvid codec
+        '.mov': 'mp4v',  # QuickTime compatible
+        '.mkv': 'X264',  # H.264 codec
+    }
+    
+    codec = codec_map.get(ext, 'mp4v')  # Default to mp4v
+    return codec
+
+
 def setup_video_io(video_path: str, output_path: str, dataset: AvaDataset):
     """Initialize video capture and writer."""
     cap = initialize_video_capture(video_path)
     fps, width, height = get_video_properties(cap, dataset)
     
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    # Get appropriate codec based on output file extension
+    codec = get_video_codec(output_path)
+    fourcc = cv2.VideoWriter_fourcc(*codec)
     writer = cv2.VideoWriter(output_path, fourcc, dataset.target_fps, (width, height))
     
     if not writer.isOpened():
         cap.release()
-        raise RuntimeError(f'Failed to open video writer for {output_path}')
+        raise RuntimeError(f'Failed to open video writer for {output_path} with codec {codec}')
     
     return cap, writer, fps, width, height
 
@@ -562,8 +585,8 @@ def setup_video_io(video_path: str, output_path: str, dataset: AvaDataset):
 def initialize_ground_truth_entity_counts(annots, dataset: AvaDataset):
     """Initialize ground truth entity counts from all CSV annotations.
     
-    Tracks original AVA labels separately from mapped VVAD labels to show
-    the breakdown of speaking-and-audible vs speaking-but-not-audible.
+    Maps both speaking types (speaking-audible and speaking-not-audible) to 'speaking'
+    to match the model output format which only has 'speaking' and 'not-speaking'.
     """
     entity_gt_total = defaultdict(int)
     entity_gt_labels_all = defaultdict(lambda: defaultdict(int))
@@ -574,9 +597,10 @@ def initialize_ground_truth_entity_counts(annots, dataset: AvaDataset):
             entity_gt_total[entity_id] += 1
             label = annot.get('label', '')
             if label:
-                # Use label directly from CSV (convert to lowercase with dashes for consistency)
-                label_key = label.lower().replace('_', '-')
-                entity_gt_labels_all[entity_id][label_key] += 1
+                # Map to VVAD format: both speaking types -> 'speaking', not-speaking -> 'not-speaking'
+                numeric_label = dataset._map_label(label)
+                mapped_label = _map_ava_to_vvad_text(numeric_label)
+                entity_gt_labels_all[entity_id][mapped_label] += 1
     
     return entity_gt_total, entity_gt_labels_all
 
@@ -719,9 +743,9 @@ def evaluate_frame(frame_count, pred_boxes, timestamp_to_annotations, width, hei
         
         if process_single_match(pred_box, gt_box, iou, width, height, stats, out_rgb):
             frame_correct += 1
-            logger.info(f'  ✓ Correct prediction')
+            logger.info(f'  Correct prediction')
         else:
-            logger.info(f'  ✗ Wrong prediction')
+            logger.info(f'  Wrong prediction')
     
     draw_frame_summary(out_rgb, frame_count, frame_correct, len(matches), height)
     logger.info(f'Frame {frame_count} summary: {frame_correct}/{len(matches)} correct ({len(matches)} matches total)')
@@ -890,8 +914,10 @@ def main():
 
     output_path = args.output
     if output_path is None:
-        base, ext = os.path.splitext(os.path.basename(video_path))
-        output_path = os.path.join(os.path.dirname(video_path), f"{base}_vvad.mp4")
+        base, _ = os.path.splitext(os.path.basename(video_path))
+        # Ensure extension starts with dot
+        output_ext = args.output_ext if args.output_ext.startswith('.') else f'.{args.output_ext}'
+        output_path = os.path.join(os.path.dirname(video_path), f"{base}_vvad{output_ext}")
     
     if args.enable_logging:
         logger.info(f'Output will be saved to: {output_path}')
