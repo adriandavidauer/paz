@@ -11,7 +11,7 @@ import paz.pipelines.detection as dt
 
 
 def setup_logging(log_file_path=None, enable_logging=True):
-    """Setup logging to file instead of terminal."""
+    """Setup logging to file."""
     # Create logger
     logger = logging.getLogger('VVAD_Evaluation')
     logger.setLevel(logging.DEBUG)
@@ -25,8 +25,12 @@ def setup_logging(log_file_path=None, enable_logging=True):
         return logger
     
     if log_file_path is None:
+        # Create logs directory if it doesn't exist
+        logs_dir = 'logs'
+        os.makedirs(logs_dir, exist_ok=True)
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file_path = f"vvad_evaluation_{timestamp}.log"
+        log_file_path = os.path.join(logs_dir, f"vvad_evaluation_{timestamp}.log")
     
     # Create file handler
     file_handler = logging.FileHandler(log_file_path, mode='w')
@@ -54,14 +58,15 @@ def parse_args():
     parser.add_argument('--iou_threshold', type=float, default=0.5,
                         help='IoU threshold for matching predicted boxes to GT boxes')
     parser.add_argument('--log_file', type=str, default=None,
-                        help='Log file path (default: vvad_evaluation_TIMESTAMP.log)')
+                        help='Log file path (default: logs/vvad_evaluation_TIMESTAMP.log)')
     parser.add_argument('--enable_logging', type=bool, default=True,
                         help='Enable logging (default: True)')
     return parser.parse_args()
 
 
 def pick_first_annotated_video(dataset: AvaDataset):
-    """Find first video with available annotations."""
+    """Find first video with available annotations. 
+    In case the user does not specify a video, this function will pick the first video with available annotations."""
     for file_name in dataset.file_names:
         video_name = os.path.splitext(file_name)[0]
         csv_path = os.path.join(dataset.csv_dir, f"{video_name}-activespeaker.csv")
@@ -74,8 +79,27 @@ def pick_first_annotated_video(dataset: AvaDataset):
 
 
 def _map_ava_to_vvad_text(ava_numeric_label: int) -> str:
-    """Map AVA label (0,1,2) to VVAD label ('not-speaking', 'speaking')."""
-    return 'not-speaking' if ava_numeric_label == 0 else 'speaking'
+    """Map AVA label (0,1,2) to VVAD label for comparison.
+    
+    Maps:
+    - 0 (NOT_SPEAKING) -> 'not-speaking'
+    - 1 (SPEAKING_BUT_NOT_AUDIBLE) -> 'speaking'
+    - 2 (SPEAKING_AUDIBLE) -> 'speaking'
+    
+    Both speaking states map to 'speaking' since VVAD only outputs 'speaking' or 'not-speaking'.
+    """
+    logger = logging.getLogger('VVAD_Evaluation')
+    if ava_numeric_label == 0:
+        return 'not-speaking'
+    elif ava_numeric_label == 1:
+        return 'speaking'
+    elif ava_numeric_label == 2:
+        return 'speaking'
+    else:
+        logger.error(f"Invalid AVA label: {ava_numeric_label}")
+        return 'error'
+
+
 
 
 def compute_iou(box_a, box_b):
@@ -246,7 +270,7 @@ def get_evaluation_timestamps(annots, min_frames=38, stride=2):
     
     # Start from min_frames to allow VVAD buffer to mature
     start_idx = min(min_frames, len(timestamps))
-    eval_timestamps = timestamps[start_idx::stride]
+    eval_timestamps = timestamps #timestamps[start_idx::stride]
     logger.info(f'After applying min_frames={min_frames} and stride={stride}: {len(eval_timestamps)} timestamps')
     logger.debug(f'Evaluation timestamps: {eval_timestamps[:10]}')
     
@@ -323,6 +347,7 @@ def process_frame_predictions(frame_rgb, pipeline):
     
     # Debug: print prediction details and coordinate format
     logger.debug(f"Pipeline predictions:")
+    logger.debug(f"Result raw predictions: {result}")
     logger.debug(f"  Result type: {type(result)}")
     logger.debug(f"  Number of predicted boxes: {len(pred_boxes)}")
     logger.debug(f"  Frame shape: {frame_rgb.shape}")
@@ -404,7 +429,9 @@ def initialize_entity_tracking():
         'entity_correct': defaultdict(int),
         'entity_matched': defaultdict(int),
         'entity_labels': defaultdict(lambda: defaultdict(int)),
-        'entity_gt_labels': defaultdict(lambda: defaultdict(int))
+        'entity_gt_labels': defaultdict(lambda: defaultdict(int)),  # GT labels for matched annotations (mapped to VVAD)
+        'entity_gt_total': defaultdict(int),  # Total GT annotations per entity from CSV
+        'entity_gt_labels_all': defaultdict(lambda: defaultdict(int))  # All GT labels from CSV (original AVA labels)
     }
 
 
@@ -428,9 +455,22 @@ def print_entity_accuracy(entity_tracking):
     print('\nEntity-level Accuracy:')
     print('=' * 60)
     
-    entity_ids = sorted(entity_tracking['entity_predictions'].keys())
-    for entity_id in entity_ids:
-        _print_single_entity_stats(entity_id, entity_tracking)
+    # Show all entities (both matched and unmatched)
+    all_entity_ids = sorted(set(list(entity_tracking['entity_predictions'].keys()) + 
+                               list(entity_tracking['entity_gt_total'].keys())))
+    
+    for entity_id in all_entity_ids:
+        if entity_id in entity_tracking['entity_predictions']:
+            _print_single_entity_stats(entity_id, entity_tracking)
+        else:
+            # Entity exists in GT but has no matches
+            gt_total = entity_tracking['entity_gt_total'][entity_id]
+            gt_labels_all = entity_tracking['entity_gt_labels_all'][entity_id]
+            print(f'  Entity {entity_id}:')
+            print(f'    No matches: 0/{gt_total} GT annotations matched')
+            print(f'    Ground Truth (all from CSV): speaking-audible={gt_labels_all.get("speaking-audible", 0)}, '
+                  f'speaking-not-audible={gt_labels_all.get("speaking-not-audible", 0)}, '
+                  f'not-speaking={gt_labels_all.get("not-speaking", 0)}')
     
     _print_entity_summary(entity_tracking)
 
@@ -443,29 +483,53 @@ def _print_single_entity_stats(entity_id, entity_tracking):
     accuracy = correct / matched if matched > 0 else 0
     
     pred_labels = entity_tracking['entity_labels'][entity_id]
-    gt_labels = entity_tracking['entity_gt_labels'][entity_id]
+    gt_labels = entity_tracking['entity_gt_labels'][entity_id]  # Matched GT labels (mapped to VVAD)
+    gt_labels_all = entity_tracking['entity_gt_labels_all'][entity_id]  # All GT labels from CSV (original AVA)
+    gt_total = entity_tracking['entity_gt_total'][entity_id]
     
     print(f'  Entity {entity_id}:')
     print(f'    Accuracy: {accuracy:.4f} ({correct}/{matched})')
+    print(f'    Matched: {matched}/{gt_total} GT annotations')
     print(f'    Predictions: speaking={pred_labels.get("speaking", 0)}, '
           f'not-speaking={pred_labels.get("not-speaking", 0)}')
-    print(f'    Ground Truth: speaking={gt_labels.get("speaking", 0)}, '
+    print(f'    Ground Truth (matched): speaking={gt_labels.get("speaking", 0)}, '
           f'not-speaking={gt_labels.get("not-speaking", 0)}')
+    print(f'    Ground Truth (all from CSV): speaking-audible={gt_labels_all.get("speaking-audible", 0)}, '
+          f'speaking-not-audible={gt_labels_all.get("speaking-not-audible", 0)}, '
+          f'not-speaking={gt_labels_all.get("not-speaking", 0)}')
 
 
 def _print_entity_summary(entity_tracking):
     """Print summary statistics across all entities."""
-    if not entity_tracking['entity_predictions']:
-        return
+    # Count all unique entities from ground truth (including unmatched)
+    all_entity_ids = set(entity_tracking['entity_gt_total'].keys())
+    matched_entity_ids = set(entity_tracking['entity_predictions'].keys())
     
-    total_entities = len(entity_tracking['entity_predictions'])
+    total_entities_gt = len(all_entity_ids)
+    total_entities_matched = len(matched_entity_ids)
+    
     total_correct = sum(entity_tracking['entity_correct'].values())
     total_matched = sum(entity_tracking['entity_matched'].values())
+    total_gt_annotations = sum(entity_tracking['entity_gt_total'].values())
     overall_accuracy = total_correct / total_matched if total_matched > 0 else 0
     
     print('\nEntity Summary:')
-    print(f'  Total entities: {total_entities}')
+    print(f'  Total unique entities in GT: {total_entities_gt}')
+    print(f'  Entities with matches: {total_entities_matched}')
+    print(f'  Entities without matches: {total_entities_gt - total_entities_matched}')
+    print(f'  Total GT annotations: {total_gt_annotations}')
+    print(f'  Total matched annotations: {total_matched}')
     print(f'  Overall entity accuracy: {overall_accuracy:.4f} ({total_correct}/{total_matched})')
+    
+    # Show unmatched entities
+    unmatched_entities = all_entity_ids - matched_entity_ids
+    if unmatched_entities:
+        print(f'\n  Unmatched entities ({len(unmatched_entities)}):')
+        for entity_id in sorted(unmatched_entities)[:10]:  # Show first 10
+            gt_count = entity_tracking['entity_gt_total'][entity_id]
+            print(f'    {entity_id}: {gt_count} GT annotations (no matches)')
+        if len(unmatched_entities) > 10:
+            print(f'    ... and {len(unmatched_entities) - 10} more')
 
 
 def setup_evaluation(video_path: str, dataset: AvaDataset):
@@ -493,6 +557,28 @@ def setup_video_io(video_path: str, output_path: str, dataset: AvaDataset):
         raise RuntimeError(f'Failed to open video writer for {output_path}')
     
     return cap, writer, fps, width, height
+
+
+def initialize_ground_truth_entity_counts(annots, dataset: AvaDataset):
+    """Initialize ground truth entity counts from all CSV annotations.
+    
+    Tracks original AVA labels separately from mapped VVAD labels to show
+    the breakdown of speaking-and-audible vs speaking-but-not-audible.
+    """
+    entity_gt_total = defaultdict(int)
+    entity_gt_labels_all = defaultdict(lambda: defaultdict(int))
+    
+    for annot in annots:
+        entity_id = annot.get('entity_id', '')
+        if entity_id:
+            entity_gt_total[entity_id] += 1
+            label = annot.get('label', '')
+            if label:
+                # Use label directly from CSV (convert to lowercase with dashes for consistency)
+                label_key = label.lower().replace('_', '-')
+                entity_gt_labels_all[entity_id][label_key] += 1
+    
+    return entity_gt_total, entity_gt_labels_all
 
 
 def prepare_evaluation_data(annots, fps, dataset: AvaDataset):
@@ -733,6 +819,11 @@ def evaluate_ava_video(video_path: str, output_path: str, dataset: AvaDataset, i
     
     timestamp_to_annotations, eval_frame_indices = prepare_evaluation_data(annots, fps, dataset)
     stats = initialize_statistics()
+    
+    # Initialize ground truth entity counts from all annotations
+    entity_gt_total, entity_gt_labels_all = initialize_ground_truth_entity_counts(annots, dataset)
+    stats['entity_tracking']['entity_gt_total'] = entity_gt_total
+    stats['entity_tracking']['entity_gt_labels_all'] = entity_gt_labels_all
     
     try:
         frame_count = process_video_frames(cap, writer, pipeline, timestamp_to_annotations,

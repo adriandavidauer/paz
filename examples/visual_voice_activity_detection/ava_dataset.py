@@ -180,7 +180,7 @@ class AvaDataset:
     def _map_label(self, label):
         """Map label string to integer."""
         label_map = {
-            "SPEAKING_AND_AUDIBLE": 2,
+            "SPEAKING_AUDIBLE": 2,
             "SPEAKING_BUT_NOT_AUDIBLE": 1,
             "NOT_SPEAKING": 0
         }
