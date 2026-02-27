@@ -23,6 +23,13 @@ class AvaDataset:
         self.log_dir = log_dir
         self.target_fps = target_fps
         self.resize = resize
+
+        # Track whether directories existed before ensuring them so we can
+        # notify on creation vs reuse.
+        video_dir_exists = os.path.isdir(self.video_dir)
+        csv_dir_exists = os.path.isdir(self.csv_dir)
+        log_dir_exists = os.path.isdir(self.log_dir)
+
         os.makedirs(self.video_dir, exist_ok=True)
         os.makedirs(self.csv_dir, exist_ok=True)
         os.makedirs(self.log_dir, exist_ok=True)
@@ -34,15 +41,46 @@ class AvaDataset:
         self.logger = logging.getLogger("AvaDataset")
         
         if not self.logger.hasHandlers():
-            formatter = logging.Formatter("[%(levelname)s] %(message)s")
-            
-            # File handler
-            log_file = os.path.join(self.log_dir, f"ava_dataset_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+            # Detailed formatter for log file
+            file_formatter = logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            )
+
+            # File handler for detailed information
+            log_file = os.path.join(
+                self.log_dir,
+                f"ava_dataset_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
+            )
             file_handler = logging.FileHandler(log_file)
-            file_handler.setFormatter(formatter)
+            file_handler.setFormatter(file_formatter)
+            file_handler.setLevel(logging.DEBUG)
+
+            # Console handler for high-level notifications (downloads, folders, failures)
+            console_handler = logging.StreamHandler()
+            console_formatter = logging.Formatter("[%(levelname)s] %(message)s")
+            console_handler.setFormatter(console_formatter)
+            console_handler.setLevel(logging.INFO)
+
             self.logger.addHandler(file_handler)
+            self.logger.addHandler(console_handler)
         
         self.logger.setLevel(log_level)
+
+        # Notify about directory creation or reuse (printed via console handler).
+        if not video_dir_exists:
+            self.logger.info(f"Created video directory: {self.video_dir}")
+        else:
+            self.logger.info(f"Using existing video directory: {self.video_dir}")
+
+        if not csv_dir_exists:
+            self.logger.info(f"Created annotations directory: {self.csv_dir}")
+        else:
+            self.logger.info(f"Using existing annotations directory: {self.csv_dir}")
+
+        if not log_dir_exists:
+            self.logger.info(f"Created log directory: {self.log_dir}")
+        else:
+            self.logger.info(f"Using existing log directory: {self.log_dir}")
         
         self._download_annotations()
         self.file_names = self._load_file_list()
@@ -178,10 +216,15 @@ class AvaDataset:
             }
 
     def _map_label(self, label):
-        """Map label string to integer."""
+        """Map label string to integer.
+        
+        Handles both SPEAKING_NOT_AUDIBLE and SPEAKING_BUT_NOT_AUDIBLE formats
+        from CSV annotations.
+        """
         label_map = {
             "SPEAKING_AUDIBLE": 2,
             "SPEAKING_BUT_NOT_AUDIBLE": 1,
+            "SPEAKING_NOT_AUDIBLE": 1,  # Handle CSV variation
             "NOT_SPEAKING": 0
         }
         return label_map.get(label, 0)
